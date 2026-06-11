@@ -1,0 +1,27 @@
+# pkgup config — ~/.config/pkgup/config 로 복사해서 사용
+# 이 파일은 zsh 로 source 됩니다.
+
+# Slack incoming webhook URL (없으면 Slack 전송은 건너뜀, 로그/stdout 에는 리포트 출력)
+SLACK_WEBHOOK_URL="https://hooks.slack.com/services/XXXX/YYYY/ZZZZ"
+
+# npm 글로벌 업데이트 대상:
+#   "latest"  → 최신 버전으로 (npm install -g pkg@latest)  [기본값]
+#   "wanted"  → semver 범위 내에서만 (npm update -g pkg)
+NPM_UPDATE_TARGET="latest"
+
+# 업그레이드 후 brew cleanup 실행 여부
+BREW_CLEANUP=false
+
+# 자동 업데이트되는 GUI cask 까지 검사 (brew outdated --greedy)
+BREW_CASK_GREEDY=false
+
+# 스케줄(launchd/cron) 실행 시 PATH 보강이 필요한 경우 (예: nvm/fnm 노드 경로)
+# EXTRA_PATH="$HOME/.nvm/versions/node/v22.0.0/bin"
+
+# ── launchd 스케줄 (pkgup schedule install) ──
+# 실행 요일/시각. Weekday: 0 또는 7 = 일요일
+# SCHEDULE_WEEKDAY=0
+# SCHEDULE_HOUR=10
+# SCHEDULE_MINUTE=0
+# LaunchAgent 라벨 (기본 com.user.pkgup)
+# PKGUP_LABEL="com.user.pkgup"

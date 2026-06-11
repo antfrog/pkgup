@@ -1,0 +1,511 @@
+#!/usr/bin/env zsh
+#
+# pkgup — Homebrew & npm 글로벌 패키지 자동 업데이트 + 마스킹 + Slack 리포트
+#
+# - mask 안 된 패키지: 자동 업데이트
+# - mask 된 패키지: 터미널(대화식)에서는 확인 후 업데이트, 스케줄(비대화식)에서는 pending 처리
+# - 업데이트 결과를 Slack incoming webhook으로 리포트
+#
+set -e
+set -u
+set -o pipefail
+
+# ── 전역 설정 ───────────────────────────────────────────────────────────────
+typeset -g PKGUP_HOME="${PKGUP_HOME:-$HOME/.config/pkgup}"
+typeset -g MASK_FILE="$PKGUP_HOME/masks"
+typeset -g CONFIG_FILE="$PKGUP_HOME/config"
+typeset -g LOG_FILE="/dev/null"
+typeset -g start_ts=""
+
+# launchd LaunchAgent 설정 (config 에서 덮어쓸 수 있음)
+typeset -g PKGUP_LABEL="${PKGUP_LABEL:-com.user.pkgup}"
+
+# 결과 누적용 배열
+typeset -ga R_updated_brew=() R_updated_cask=() R_updated_npm=()
+typeset -ga R_failed=() R_pending=() R_skipped=()
+
+# ── 유틸 ────────────────────────────────────────────────────────────────────
+log() { print -r -- "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_FILE" >&2; }
+
+ensure_dirs() { [[ -d $PKGUP_HOME ]] || mkdir -p "$PKGUP_HOME"; }
+
+load_config() {
+  [[ -f $CONFIG_FILE ]] && source "$CONFIG_FILE"
+  if [[ -n ${EXTRA_PATH:-} ]]; then PATH="$EXTRA_PATH:$PATH"; export PATH; fi
+}
+
+validate_mgr() {
+  case $1 in
+    brew|cask|npm) ;;
+    *) print -r -- "invalid manager: $1 (use brew, cask, or npm)" >&2; exit 2 ;;
+  esac
+}
+
+is_masked() {  # is_masked <manager> <name>  → 0 if masked
+  [[ -f $MASK_FILE ]] || return 1
+  grep -qxF -- "$1:$2" "$MASK_FILE"
+}
+
+# Slack mrkdwn 문자열을 JSON 문자열 값으로 안전하게 이스케이프
+json_escape() {
+  local s=$1
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\t'/\\t}
+  s=${s//$'\r'/}
+  print -r -- "$s"
+}
+
+# ── 마스킹 관리 ─────────────────────────────────────────────────────────────
+mask_add() {
+  validate_mgr "$1"
+  ensure_dirs
+  local key="$1:$2"
+  if grep -qxF -- "$key" "$MASK_FILE" 2>/dev/null; then
+    print -r -- "already masked: $key"; return 0
+  fi
+  print -r -- "$key" >> "$MASK_FILE"
+  print -r -- "masked: $key"
+}
+
+mask_rm() {
+  validate_mgr "$1"
+  local key="$1:$2"
+  if [[ -f $MASK_FILE ]] && grep -qxF -- "$key" "$MASK_FILE"; then
+    grep -vxF -- "$key" "$MASK_FILE" > "$MASK_FILE.tmp" || true
+    mv "$MASK_FILE.tmp" "$MASK_FILE"
+    print -r -- "unmasked: $key"
+  else
+    print -r -- "not masked: $key"
+  fi
+}
+
+mask_list() {
+  if [[ ! -s ${MASK_FILE} ]]; then print -r -- "no masked packages"; return 0; fi
+  print -r -- "Masked packages:"
+  local mgr name
+  sort "$MASK_FILE" | while IFS=: read -r mgr name; do
+    [[ -z $mgr ]] && continue
+    print -r -- "  [$mgr] $name"
+  done
+}
+
+# ── 업그레이드 실행 ─────────────────────────────────────────────────────────
+do_brew_upgrade() {  # do_brew_upgrade <formula|cask> <name> <cur> <latest>
+  local kind=$1 name=$2 cur=$3 latest=$4
+  local flag=--formula; [[ $kind == cask ]] && flag=--cask
+  log "Upgrading brew $kind: $name ($cur → $latest)"
+  if brew upgrade $flag "$name" >>"$LOG_FILE" 2>&1; then
+    if [[ $kind == cask ]]; then R_updated_cask+=("$name: $cur → $latest")
+    else R_updated_brew+=("$name: $cur → $latest"); fi
+  else
+    R_failed+=("brew/$kind $name ($cur → $latest)")
+    log "FAILED: brew $kind $name"
+  fi
+}
+
+do_npm_upgrade() {  # do_npm_upgrade <name> <cur> <latest>
+  local name=$1 cur=$2 latest=$3
+  local target=${NPM_UPDATE_TARGET:-latest}
+  log "Upgrading npm global: $name ($cur → $latest) [target=$target]"
+  local rc=0
+  if [[ $target == wanted ]]; then
+    npm update -g "$name" >>"$LOG_FILE" 2>&1 || rc=$?
+  else
+    npm install -g "$name@latest" >>"$LOG_FILE" 2>&1 || rc=$?
+  fi
+  if (( rc == 0 )); then
+    R_updated_npm+=("$name: $cur → $latest")
+  else
+    R_failed+=("npm $name ($cur → $latest)")
+    log "FAILED: npm $name (rc=$rc)"
+  fi
+}
+
+handle_masked() {  # handle_masked <mode> <mgr> <name> <cur> <latest>
+  local mode=$1 mgr=$2 name=$3 cur=$4 latest=$5
+  if [[ $mode == interactive ]]; then
+    local ans=""
+    print -n -- "Masked ${mgr} '${name}' has an update (${cur} → ${latest}). Update now? [y/N] "
+    read -r ans
+    if [[ $ans == (y|Y|yes|YES) ]]; then
+      case $mgr in
+        brew) do_brew_upgrade formula "$name" "$cur" "$latest" ;;
+        cask) do_brew_upgrade cask    "$name" "$cur" "$latest" ;;
+        npm)  do_npm_upgrade          "$name" "$cur" "$latest" ;;
+      esac
+    else
+      R_skipped+=("$mgr $name ($cur → $latest)")
+    fi
+  else
+    R_pending+=("$mgr $name ($cur → $latest)")
+  fi
+}
+
+# ── outdated 수집 ───────────────────────────────────────────────────────────
+update_brew_formulae() {
+  local mode=$1
+  local -a outdated=()
+  local line name cur latest
+  # 대화식 read 가 process-substitution stdin 을 먹지 않도록, 먼저 배열로 수집
+  while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    outdated+=("$line")
+  done < <(brew outdated --formula --verbose 2>/dev/null || true)
+  (( ${#outdated} == 0 )) && return
+  for line in "${outdated[@]}"; do
+    name=${line%% *}
+    cur=${line#*\(}; cur=${cur%%\)*}
+    latest=${line##* }
+    if is_masked brew "$name"; then
+      handle_masked "$mode" brew "$name" "$cur" "$latest"
+    else
+      do_brew_upgrade formula "$name" "$cur" "$latest"
+    fi
+  done
+}
+
+update_brew_casks() {
+  local mode=$1
+  local greedy=""; [[ ${BREW_CASK_GREEDY:-false} == true ]] && greedy="--greedy"
+  local -a outdated=()
+  local line name cur latest
+  while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    outdated+=("$line")
+  done < <(brew outdated --cask $greedy --verbose 2>/dev/null || true)
+  (( ${#outdated} == 0 )) && return
+  for line in "${outdated[@]}"; do
+    name=${line%% *}
+    cur=${line#*\(}; cur=${cur%%\)*}
+    latest=${line##* }
+    if is_masked cask "$name"; then
+      handle_masked "$mode" cask "$name" "$cur" "$latest"
+    else
+      do_brew_upgrade cask "$name" "$cur" "$latest"
+    fi
+  done
+}
+
+npm_outdated_parsed() {  # 출력: name\tcurrent\tlatest\twanted
+  npm outdated -g --json 2>/dev/null | node -e '
+    let d="";
+    process.stdin.on("data", c => d += c);
+    process.stdin.on("end", () => {
+      let o = {};
+      try { o = JSON.parse(d || "{}"); } catch (e) { o = {}; }
+      for (const k of Object.keys(o)) {
+        const v = o[k] || {};
+        process.stdout.write([k, v.current||"", v.latest||"", v.wanted||""].join("\t") + "\n");
+      }
+    });
+  ' 2>/dev/null || true
+}
+
+update_npm_globals() {
+  local mode=$1
+  local -a rows=()
+  local row name cur latest wanted rest
+  while IFS= read -r row; do
+    [[ -z $row ]] && continue
+    rows+=("$row")
+  done < <(npm_outdated_parsed)
+  (( ${#rows} == 0 )) && return
+  for row in "${rows[@]}"; do
+    name=${row%%$'\t'*};  rest=${row#*$'\t'}
+    cur=${rest%%$'\t'*};  rest=${rest#*$'\t'}
+    latest=${rest%%$'\t'*}; wanted=${rest#*$'\t'}
+    if is_masked npm "$name"; then
+      handle_masked "$mode" npm "$name" "$cur" "$latest"
+    else
+      do_npm_upgrade "$name" "$cur" "$latest"
+    fi
+  done
+}
+
+# ── 리포트 / Slack ─────────────────────────────────────────────────────────
+report_section() {  # report_section <title> <array-name>
+  local title=$1 arrname=$2
+  local -a items=( "${(@P)arrname}" )
+  (( ${#items} == 0 )) && return
+  print -r -- "*${title}*"
+  local it
+  for it in "${items[@]}"; do print -r -- "• ${it}"; done
+  print
+}
+
+build_report() {
+  local mode=$1
+  local host; host=$(hostname -s 2>/dev/null || hostname)
+  local end_ts; end_ts=$(date "+%Y-%m-%d %H:%M:%S")
+  {
+    print -r -- ":package: *pkgup* — \`${host}\`  (${mode} mode)"
+    print -r -- "_${start_ts} → ${end_ts}_"
+    print
+    report_section ":white_check_mark: Updated — Homebrew formulae" R_updated_brew
+    report_section ":white_check_mark: Updated — Homebrew casks"    R_updated_cask
+    report_section ":white_check_mark: Updated — npm globals"       R_updated_npm
+    report_section ":pause_button: Masked — pending confirmation"   R_pending
+    report_section ":next_track_button: Masked — skipped"           R_skipped
+    report_section ":x: Failed"                                     R_failed
+    if (( ${#R_updated_brew} + ${#R_updated_cask} + ${#R_updated_npm} \
+          + ${#R_pending} + ${#R_skipped} + ${#R_failed} == 0 )); then
+      print -r -- ":information_source: Everything is already up to date."
+    fi
+    if (( ${#R_pending} > 0 )); then
+      print
+      print -r -- "_Run \`pkgup update\` in a terminal to review masked packages._"
+    fi
+  }
+}
+
+send_slack() {
+  local report=$1
+  if [[ -z ${SLACK_WEBHOOK_URL:-} ]]; then
+    log "SLACK_WEBHOOK_URL not set; skipping Slack notification."
+    return 0
+  fi
+  local payload="{\"text\":\"$(json_escape "$report")\"}"
+  local rc=0
+  curl -sS -X POST -H 'Content-Type: application/json' \
+       --data "$payload" "$SLACK_WEBHOOK_URL" >>"$LOG_FILE" 2>&1 || rc=$?
+  if (( rc == 0 )); then log "Slack notification sent."
+  else log "Slack notification failed (rc=$rc)."; fi
+}
+
+prune_logs() {
+  local d="$PKGUP_HOME/logs"
+  [[ -d $d ]] || return 0
+  local -a old=( ${(f)"$(ls -1t "$d" 2>/dev/null | tail -n +21)"} )
+  local f
+  for f in "${old[@]}"; do [[ -n $f ]] && rm -f "$d/$f"; done
+}
+
+# ── 명령 ────────────────────────────────────────────────────────────────────
+cmd_update() {
+  local mode=$1
+  ensure_dirs
+  mkdir -p "$PKGUP_HOME/logs"
+  LOG_FILE="$PKGUP_HOME/logs/pkgup-$(date +%Y%m%d-%H%M%S).log"
+  load_config
+  start_ts=$(date "+%Y-%m-%d %H:%M:%S")
+  log "pkgup start (mode=$mode)"
+
+  if command -v brew >/dev/null 2>&1; then
+    log "brew update..."
+    brew update >>"$LOG_FILE" 2>&1 || log "brew update failed (continuing)"
+    update_brew_formulae "$mode"
+    update_brew_casks "$mode"
+    [[ ${BREW_CLEANUP:-false} == true ]] && { log "brew cleanup..."; brew cleanup >>"$LOG_FILE" 2>&1 || true; }
+  else
+    log "brew not found, skipping"
+  fi
+
+  if command -v npm >/dev/null 2>&1; then
+    update_npm_globals "$mode"
+  else
+    log "npm not found, skipping"
+  fi
+
+  local report; report=$(build_report "$mode")
+  print -r -- "$report" | tee -a "$LOG_FILE"
+  send_slack "$report"
+  prune_logs
+  log "pkgup done"
+}
+
+cmd_check() {
+  ensure_dirs; load_config
+  print -r -- "== outdated (dry run) =="
+  local l n
+  if command -v brew >/dev/null 2>&1; then
+    brew update >/dev/null 2>&1 || true
+    print -r -- "\n[brew formulae]"
+    brew outdated --formula --verbose 2>/dev/null | while IFS= read -r l; do
+      [[ -z $l ]] && continue
+      n=${l%% *}
+      if is_masked brew "$n"; then print -r -- "  $l   (MASKED)"; else print -r -- "  $l"; fi
+    done
+    print -r -- "\n[brew casks]"
+    brew outdated --cask --verbose 2>/dev/null | while IFS= read -r l; do
+      [[ -z $l ]] && continue
+      n=${l%% *}
+      if is_masked cask "$n"; then print -r -- "  $l   (MASKED)"; else print -r -- "  $l"; fi
+    done
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    print -r -- "\n[npm globals]"
+    npm_outdated_parsed | while IFS=$'\t' read -r n c la w; do
+      [[ -z $n ]] && continue
+      if is_masked npm "$n"; then print -r -- "  $n ($c → $la)   (MASKED)"; else print -r -- "  $n ($c → $la)"; fi
+    done
+  fi
+  print -r -- ""
+  mask_list
+}
+
+# ── launchd 스케줄 관리 ─────────────────────────────────────────────────────
+agent_plist() { print -r -- "$HOME/Library/LaunchAgents/${PKGUP_LABEL}.plist"; }
+
+write_agent_plist() {  # write_agent_plist <self-path>
+  local self=$1
+  local weekday=${SCHEDULE_WEEKDAY:-0} hour=${SCHEDULE_HOUR:-10} minute=${SCHEDULE_MINUTE:-0}
+  local plist; plist=$(agent_plist)
+  mkdir -p "${plist:h}"
+  cat > "$plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${PKGUP_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${self}</string>
+    <string>update</string>
+    <string>--yes</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key><integer>${weekday}</integer>
+    <key>Hour</key><integer>${hour}</integer>
+    <key>Minute</key><integer>${minute}</integer>
+  </dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${HOME}/.npm-global/bin</string>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>${HOME}/Library/Logs/pkgup.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>${HOME}/Library/Logs/pkgup.err.log</string>
+</dict>
+</plist>
+EOF
+  print -r -- "$plist"
+}
+
+schedule_install() {
+  ensure_dirs; load_config
+  local self="${0:A}"
+  if [[ ! -x $self ]]; then
+    print -r -- "cannot resolve own path ($self); install pkgup to a fixed location first" >&2
+    exit 1
+  fi
+  local plist; plist=$(write_agent_plist "$self")
+  local dom="gui/${UID}"
+  launchctl bootout "$dom/${PKGUP_LABEL}" 2>/dev/null || true   # 기존 등록 정리 (idempotent)
+  launchctl bootstrap "$dom" "$plist"
+  launchctl enable "$dom/${PKGUP_LABEL}"
+  local weekday=${SCHEDULE_WEEKDAY:-0} hour=${SCHEDULE_HOUR:-10} minute=${SCHEDULE_MINUTE:-0}
+  print -r -- "installed: ${PKGUP_LABEL}"
+  print -r -- "  exec:     $self update --yes"
+  print -r -- "  schedule: weekday=${weekday} ${hour}:$(printf '%02d' "$minute")  (0=Sun)"
+  print -r -- "  plist:    $plist"
+  print -r -- "  test now: launchctl kickstart -k $dom/${PKGUP_LABEL}"
+}
+
+schedule_uninstall() {
+  load_config
+  local plist; plist=$(agent_plist)
+  launchctl bootout "gui/${UID}/${PKGUP_LABEL}" 2>/dev/null || true
+  if [[ -f $plist ]]; then rm -f "$plist"; print -r -- "removed: $plist"
+  else print -r -- "no agent plist found ($plist)"; fi
+  print -r -- "uninstalled: ${PKGUP_LABEL}"
+}
+
+schedule_status() {
+  load_config
+  local plist; plist=$(agent_plist)
+  print -r -- "label:      ${PKGUP_LABEL}"
+  print -r -- "plist:      ${plist} $([[ -f $plist ]] && print -n exists || print -n missing)"
+  if launchctl list "${PKGUP_LABEL}" >/dev/null 2>&1; then
+    print -r -- "loaded:     yes"
+  else
+    print -r -- "loaded:     no"
+  fi
+  local weekday=${SCHEDULE_WEEKDAY:-0} hour=${SCHEDULE_HOUR:-10} minute=${SCHEDULE_MINUTE:-0}
+  print -r -- "schedule:   weekday=${weekday} ${hour}:$(printf '%02d' "$minute")  (config: SCHEDULE_WEEKDAY/HOUR/MINUTE)"
+}
+
+usage() {
+  cat <<'EOF'
+pkgup — Homebrew & npm auto-updater with masking + Slack reports
+
+USAGE:
+  pkgup update [--interactive | --yes]   패키지 업데이트 (TTY면 자동으로 interactive)
+  pkgup check                            outdated + masked 목록만 출력 (변경 없음)
+  pkgup mask add <brew|cask|npm> <name>  패키지 마스킹 (업데이트 시 확인 필요)
+  pkgup mask rm  <brew|cask|npm> <name>  마스킹 해제
+  pkgup mask list                        마스킹 목록
+  pkgup schedule install                 주간 자동 실행 launchd 에이전트 등록
+  pkgup schedule uninstall               에이전트 해제 및 plist 삭제
+  pkgup schedule status                  에이전트 등록/로드 상태
+  pkgup help                             도움말
+
+NOTES:
+  • 스케줄(비-TTY) 실행 = auto 모드: 비마스킹 패키지는 자동 업데이트,
+    마스킹 패키지는 업데이트가 있어도 건드리지 않고 "pending" 으로만 리포트.
+  • 마스킹 패키지를 실제로 업데이트하려면 터미널에서 `pkgup update` 실행.
+  • schedule 의 실행 요일/시각은 config 의 SCHEDULE_WEEKDAY/HOUR/MINUTE (기본 일 10:00).
+
+CONFIG: ~/.config/pkgup/config   (SLACK_WEBHOOK_URL, NPM_UPDATE_TARGET, BREW_CLEANUP, ...)
+MASKS:  ~/.config/pkgup/masks
+LOGS:   ~/.config/pkgup/logs/
+EOF
+}
+
+main() {
+  # launchd/cron 은 PATH 가 빈약하므로 흔한 경로를 보강
+  local p
+  for p in /opt/homebrew/bin /usr/local/bin "$HOME/.npm-global/bin"; do
+    [[ -d $p && ":$PATH:" != *":$p:"* ]] && PATH="$p:$PATH"
+  done
+  export PATH
+
+  local cmd=${1:-help}
+  (( $# > 0 )) && shift || true
+
+  case $cmd in
+    update)
+      local mode=auto
+      [[ -t 0 && -t 1 ]] && mode=interactive
+      while (( $# > 0 )); do
+        case $1 in
+          -i|--interactive) mode=interactive ;;
+          -y|--yes|--auto|--non-interactive) mode=auto ;;
+          *) print -r -- "unknown option: $1" >&2; exit 2 ;;
+        esac
+        shift
+      done
+      cmd_update "$mode"
+      ;;
+    check|outdated) cmd_check ;;
+    mask)
+      local sub=${1:-help}
+      (( $# > 0 )) && shift || true
+      case $sub in
+        add)         [[ $# -ge 2 ]] || { print -r -- "usage: pkgup mask add <brew|cask|npm> <name>" >&2; exit 2; }; mask_add "$1" "$2" ;;
+        rm|remove|del) [[ $# -ge 2 ]] || { print -r -- "usage: pkgup mask rm <brew|cask|npm> <name>" >&2; exit 2; }; mask_rm "$1" "$2" ;;
+        ls|list)     mask_list ;;
+        *)           print -r -- "usage: pkgup mask <add|rm|list> ..." >&2; exit 2 ;;
+      esac
+      ;;
+    schedule|agent)
+      local sub=${1:-status}
+      (( $# > 0 )) && shift || true
+      case $sub in
+        install|enable)    schedule_install ;;
+        uninstall|disable|rm) schedule_uninstall ;;
+        status|ls|list)    schedule_status ;;
+        *)                 print -r -- "usage: pkgup schedule <install|uninstall|status>" >&2; exit 2 ;;
+      esac
+      ;;
+    help|-h|--help) usage ;;
+    *) print -r -- "unknown command: $cmd" >&2; usage; exit 2 ;;
+  esac
+}
+
+main "$@"

@@ -11,6 +11,9 @@ set -u
 set -o pipefail
 
 # ── 전역 설정 ───────────────────────────────────────────────────────────────
+# Resolve own absolute path at script scope. Inside a function zsh's
+# FUNCTION_ARGZERO makes $0 the function name, so this must be captured here.
+typeset -g PKGUP_SELF="${0:A}"
 typeset -g PKGUP_HOME="${PKGUP_HOME:-$HOME/.config/pkgup}"
 typeset -g MASK_FILE="$PKGUP_HOME/masks"
 typeset -g CONFIG_FILE="$PKGUP_HOME/config"
@@ -389,7 +392,7 @@ EOF
 
 schedule_install() {
   ensure_dirs; load_config
-  local self="${0:A}"
+  local self="$PKGUP_SELF"
   if [[ ! -x $self ]]; then
     print -r -- "cannot resolve own path ($self); install pkgup to a fixed location first" >&2
     exit 1

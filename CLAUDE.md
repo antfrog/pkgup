@@ -8,11 +8,11 @@ macOS에서 Homebrew(formula/cask)와 npm 글로벌 패키지를 주기적으로
 
 ```
 .
+├── .gitignore
 ├── CLAUDE.md              # 이 파일
 ├── README.md             # 설치/사용/스케줄 문서 (변경 시 함께 갱신)
 ├── pkgup                  # 메인 실행 스크립트 (zsh, 유일한 로직)
-├── config.example        # 설정 템플릿 (실제 config 는 커밋 금지)
-└── com.user.pkgup.plist   # 수동 설치용 참고 plist (schedule install 은 동일 내용을 자동 생성)
+└── config.example         # 설정 템플릿 (실제 config 는 커밋 금지)
 ```
 
 런타임 설정/상태는 레포가 아니라 `~/.config/pkgup/` 에 위치:
@@ -61,9 +61,8 @@ pkgup update --yes    # auto 모드 강제 (스케줄과 동일 경로 검증)
    `EnvironmentVariables` 를 유지. nvm 등은 config 의 `EXTRA_PATH` 로 주입.
    - `pkgup schedule install/uninstall/status` 가 launchd 에이전트를
      `~/Library/LaunchAgents/${PKGUP_LABEL}.plist` 로 생성/로드(modern `launchctl
-     bootstrap|bootout|enable`, 도메인 `gui/$UID`)한다. `write_agent_plist()` 가
-     만드는 plist와 번들 `com.user.pkgup.plist` 는 **내용이 일치해야** 한다 — 한쪽의
-     PATH/스케줄/키를 바꾸면 다른 쪽도 갱신할 것. 자기 경로는 `${0:A}` 로 해석한다.
+     bootstrap|bootout|enable`, 도메인 `gui/$UID`)한다. plist 는
+     `write_agent_plist()` 가 생성하는 것이 유일하다. 자기 경로는 `${0:A}` 로 해석한다.
 7. **리포트 배열 동기화.** 결과는 `R_updated_brew/cask/npm`, `R_failed`,
    `R_pending`, `R_skipped` 에 누적되어 `build_report` 가 소비한다. 항목을 추가하면
    `build_report` 의 `report_section` 호출도 함께 갱신.

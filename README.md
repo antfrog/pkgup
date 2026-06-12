@@ -115,11 +115,7 @@ to apply.
 > The agent's PATH includes `~/.npm-global/bin`. If you use another node path (nvm etc.),
 > add it via `EXTRA_PATH` in config.
 
-### Manual / cron (alternative)
-
-The repository's `com.user.pkgup.plist` is a reference file for manual installation
-(`pkgup schedule install` generates the same content automatically, so it is usually
-not needed).
+### cron (alternative)
 
 To use cron instead:
 
@@ -154,9 +150,9 @@ scheduled time, so it is recommended.
 
 ```
 .
+├── .gitignore
 ├── CLAUDE.md              # project context for Claude Code
 ├── README.md
 ├── pkgup                  # main executable script (zsh)
-├── config.example        # config template
-└── com.user.pkgup.plist   # launchd LaunchAgent for weekly runs
+└── config.example         # config template
 ```

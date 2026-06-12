@@ -1,27 +1,27 @@
-# pkgup config — ~/.config/pkgup/config 로 복사해서 사용
-# 이 파일은 zsh 로 source 됩니다.
+# pkgup config — copy to ~/.config/pkgup/config
+# This file is sourced by zsh.
 
-# Slack incoming webhook URL (없으면 Slack 전송은 건너뜀, 로그/stdout 에는 리포트 출력)
+# Slack incoming webhook URL (if unset, Slack sending is skipped; the report still goes to log/stdout)
 SLACK_WEBHOOK_URL="https://hooks.slack.com/services/XXXX/YYYY/ZZZZ"
 
-# npm 글로벌 업데이트 대상:
-#   "latest"  → 최신 버전으로 (npm install -g pkg@latest)  [기본값]
-#   "wanted"  → semver 범위 내에서만 (npm update -g pkg)
+# npm global update target:
+#   "latest"  → newest version (npm install -g pkg@latest)  [default]
+#   "wanted"  → within semver range only (npm update -g pkg)
 NPM_UPDATE_TARGET="latest"
 
-# 업그레이드 후 brew cleanup 실행 여부
+# Run brew cleanup after upgrading
 BREW_CLEANUP=false
 
-# 자동 업데이트되는 GUI cask 까지 검사 (brew outdated --greedy)
+# Also check GUI casks that auto-update themselves (brew outdated --greedy)
 BREW_CASK_GREEDY=false
 
-# 스케줄(launchd/cron) 실행 시 PATH 보강이 필요한 경우 (예: nvm/fnm 노드 경로)
+# Extra PATH entries for scheduled (launchd/cron) runs (e.g. nvm/fnm node path)
 # EXTRA_PATH="$HOME/.nvm/versions/node/v22.0.0/bin"
 
-# ── launchd 스케줄 (pkgup schedule install) ──
-# 실행 요일/시각. Weekday: 0 또는 7 = 일요일
+# ── launchd schedule (pkgup schedule install) ──
+# Run weekday/time. Weekday: 0 or 7 = Sunday
 # SCHEDULE_WEEKDAY=0
 # SCHEDULE_HOUR=10
 # SCHEDULE_MINUTE=0
-# LaunchAgent 라벨 (기본 com.user.pkgup)
+# LaunchAgent label (default com.user.pkgup)
 # PKGUP_LABEL="com.user.pkgup"

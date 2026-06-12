@@ -1,155 +1,162 @@
 # pkgup
 
-macOS에서 **Homebrew(formula/cask)** 와 **npm 글로벌 패키지** 를 주기적으로 업데이트하고,
-**마스킹된 패키지는 확인 후에만** 업데이트하며, 결과를 **Slack** 으로 리포트하는 단일 zsh CLI.
+A single zsh CLI for macOS that periodically updates **Homebrew (formulae/casks)** and
+**npm global packages**, updates **masked packages only after confirmation**, and reports
+the results to **Slack**.
 
-## 특징
+## Features
 
-- formula · cask · npm 글로벌을 한 번에 업데이트
-- 마스킹(hold) 시스템: 버전을 고정하고 싶은 패키지는 자동 업데이트에서 제외하고 확인받아 적용
-- TTY 자동 감지로 대화식/비대화식(스케줄) 모드 자동 전환
-- 업데이트 결과를 Slack incoming webhook으로 리포트
-- 추가 런타임 의존성 없음 (brew / npm / node / curl / coreutils 만 사용)
+- Updates formulae, casks, and npm globals in one pass
+- Masking (hold) system: packages you want pinned are excluded from automatic updates and only applied after confirmation
+- Automatic TTY detection switches between interactive and non-interactive (scheduled) modes
+- Reports update results via a Slack incoming webhook
+- No extra runtime dependencies (only brew / npm / node / curl / coreutils)
 
-## 동작 방식
+## How it works
 
-| 실행 상황 | 모드 | 비마스킹 패키지 | 마스킹 패키지 |
+| Context | Mode | Unmasked packages | Masked packages |
 |---|---|---|---|
-| 터미널에서 `pkgup update` | `interactive` (자동 감지) | 자동 업데이트 | **y/N 확인 후 업데이트** |
-| launchd / cron 스케줄 | `auto` (TTY 없음) | 자동 업데이트 | 건드리지 않고 `pending` 으로 리포트 |
+| `pkgup update` in a terminal | `interactive` (auto-detected) | auto-updated | **updated after y/N confirmation** |
+| launchd / cron schedule | `auto` (no TTY) | auto-updated | left untouched, reported as `pending` |
 
-cron/launchd는 비대화식이라 그 안에서는 확인을 받을 수 없습니다. 따라서 스케줄 실행은
-마스킹 패키지 업데이트를 **보류(pending)** 후 Slack에 알리고, 사용자가 나중에 터미널에서
-`pkgup update` 를 직접 실행해 확인/적용하는 흐름입니다.
+cron/launchd runs are non-interactive, so no confirmation can happen there. Scheduled runs
+therefore mark masked package updates as **pending**, notify you via Slack, and you later run
+`pkgup update` in a terminal to review and apply them.
 
-## 요구사항
+## Requirements
 
-- macOS, zsh (Catalina 이후 기본 셸)
-- Homebrew (formula/cask 관리 시)
-- Node.js + npm (npm 글로벌 관리 시 — npm outdated 파싱에 node 사용)
-- npm 글로벌 prefix가 **사용자 쓰기 가능** 위치여야 sudo 없이 동작
-  (Homebrew node / nvm / `npm config set prefix ~/.npm-global` 권장)
+- macOS, zsh (the default shell since Catalina)
+- Homebrew (for managing formulae/casks)
+- Node.js + npm (for managing npm globals — node is used to parse npm outdated)
+- The npm global prefix must be **user-writable** to work without sudo
+  (Homebrew node / nvm / `npm config set prefix ~/.npm-global` recommended)
 
-## 설치
+## Install
 
 ```sh
 mkdir -p ~/.local/bin ~/.config/pkgup
 install -m 755 pkgup ~/.local/bin/pkgup
 cp config.example ~/.config/pkgup/config
-$EDITOR ~/.config/pkgup/config        # SLACK_WEBHOOK_URL 등 설정
+$EDITOR ~/.config/pkgup/config        # set SLACK_WEBHOOK_URL etc.
 
-# PATH에 ~/.local/bin 추가 (.zshrc)
+# Add ~/.local/bin to PATH (.zshrc)
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && exec zsh
 ```
 
-## 사용법
+## Usage
 
 ```sh
-pkgup check                       # outdated/masked 목록만 출력 (변경 없음, dry-run)
-pkgup update                      # 업데이트 (터미널이면 마스킹 패키지는 확인)
-pkgup update --yes                # auto 모드 강제 (마스킹은 확인 없이 보류)
-pkgup update --interactive        # interactive 모드 강제
+pkgup check                       # list outdated/masked only (no changes, dry-run)
+pkgup update                      # update (in a terminal, masked packages are confirmed)
+pkgup update --yes                # force auto mode (masked packages held without confirmation)
+pkgup update --interactive        # force interactive mode
 
-pkgup mask add brew kubectl       # formula 마스킹
-pkgup mask add cask docker        # cask 마스킹
-pkgup mask add npm  pnpm          # npm 글로벌 마스킹
-pkgup mask rm  brew kubectl       # 마스킹 해제
-pkgup mask list                   # 마스킹 목록
+pkgup mask add brew kubectl       # mask a formula
+pkgup mask add cask docker        # mask a cask
+pkgup mask add npm  pnpm          # mask an npm global
+pkgup mask rm  brew kubectl       # unmask
+pkgup mask list                   # list masks
 
-pkgup schedule install            # 주간 자동 실행 launchd 에이전트 등록
-pkgup schedule uninstall          # 에이전트 해제 + plist 삭제
-pkgup schedule status             # 등록/로드 상태 확인
+pkgup schedule install            # register a weekly launchd agent
+pkgup schedule uninstall          # unload the agent + delete the plist
+pkgup schedule status             # show registration/load status
 
-pkgup help                        # 도움말
+pkgup help                        # help
 ```
 
-## 마스킹 (hold)
+## Masking (hold)
 
-마스킹 = "자동 업데이트 금지, 확인받아야 올림". 관리자 종류는 `brew` · `cask` · `npm` 세 가지.
-클러스터와 버전 호환을 맞춰야 하는 `kubectl` · `helm` · `terraform` 같은 도구를 마스킹해 두면
-자동 루프에서 임의로 올라가지 않고, 터미널에서 직접 확인할 때만 업데이트됩니다.
+Masking means "no automatic updates; confirm before upgrading". The manager kinds are
+`brew` · `cask` · `npm`. Masking tools like `kubectl` · `helm` · `terraform`, which must stay
+version-compatible with a cluster, keeps them from being bumped arbitrarily by the automatic
+loop — they are only updated when you confirm directly in a terminal.
 
-마스킹 목록은 `~/.config/pkgup/masks` 에 `manager:name` 한 줄씩 저장됩니다.
+The mask list is stored in `~/.config/pkgup/masks`, one `manager:name` per line.
 
-## 설정
+## Configuration
 
-`~/.config/pkgup/config` (zsh로 source 됨):
+`~/.config/pkgup/config` (sourced by zsh):
 
-| 키 | 기본값 | 설명 |
+| Key | Default | Description |
 |---|---|---|
-| `SLACK_WEBHOOK_URL` | (없음) | Slack incoming webhook. 미설정 시 전송 건너뜀 (리포트는 로그/stdout에만) |
-| `NPM_UPDATE_TARGET` | `latest` | `latest` = 최신(메이저 포함) / `wanted` = semver 범위 내 |
-| `BREW_CLEANUP` | `false` | 업그레이드 후 `brew cleanup` 실행 |
-| `BREW_CASK_GREEDY` | `false` | 자체 업데이트하는 cask까지 검사 (`brew outdated --greedy`) |
-| `EXTRA_PATH` | (없음) | 스케줄 실행 시 PATH 보강 (예: nvm 노드 경로) |
-| `SCHEDULE_WEEKDAY` | `0` | `schedule install` 실행 요일 (0/7 = 일요일) |
-| `SCHEDULE_HOUR` | `10` | `schedule install` 실행 시각(시) |
-| `SCHEDULE_MINUTE` | `0` | `schedule install` 실행 시각(분) |
-| `PKGUP_LABEL` | `com.user.pkgup` | LaunchAgent 라벨 |
+| `SLACK_WEBHOOK_URL` | (none) | Slack incoming webhook. If unset, sending is skipped (report goes to log/stdout only) |
+| `NPM_UPDATE_TARGET` | `latest` | `latest` = newest (including major) / `wanted` = within semver range |
+| `BREW_CLEANUP` | `false` | Run `brew cleanup` after upgrading |
+| `BREW_CASK_GREEDY` | `false` | Also check casks that auto-update (`brew outdated --greedy`) |
+| `EXTRA_PATH` | (none) | Extra PATH entries for scheduled runs (e.g. nvm node path) |
+| `SCHEDULE_WEEKDAY` | `0` | Weekday for `schedule install` runs (0/7 = Sunday) |
+| `SCHEDULE_HOUR` | `10` | Hour for `schedule install` runs |
+| `SCHEDULE_MINUTE` | `0` | Minute for `schedule install` runs |
+| `PKGUP_LABEL` | `com.user.pkgup` | LaunchAgent label |
 
-`PKGUP_HOME` 환경변수로 설정/상태 디렉터리 위치(기본 `~/.config/pkgup`)를 바꿀 수 있습니다.
+The `PKGUP_HOME` environment variable changes the config/state directory
+(default `~/.config/pkgup`).
 
-## 주간 자동 실행
+## Weekly automatic runs
 
-### pkgup schedule (권장)
+### pkgup schedule (recommended)
 
-설치한 `pkgup` 으로 launchd 에이전트를 직접 등록/해제합니다. plist를 손으로 만들거나
-`launchctl` 을 칠 필요가 없습니다.
+The installed `pkgup` registers/unregisters the launchd agent itself. No need to write a
+plist by hand or call `launchctl`.
 
 ```sh
-pkgup schedule install      # ~/Library/LaunchAgents/<label>.plist 생성 후 등록
-pkgup schedule status       # 등록/로드 상태
-pkgup schedule uninstall    # 해제 + plist 삭제
+pkgup schedule install      # generate ~/Library/LaunchAgents/<label>.plist and register it
+pkgup schedule status       # registration/load status
+pkgup schedule uninstall    # unload + delete plist
 
-# 등록 직후 즉시 한 번 실행해 보고 싶으면 (install 출력에도 안내됨)
+# To trigger one run right after installing (also shown in the install output)
 launchctl kickstart -k gui/$(id -u)/com.user.pkgup
 ```
 
-실행 요일/시각은 config의 `SCHEDULE_WEEKDAY` / `SCHEDULE_HOUR` / `SCHEDULE_MINUTE`
-(기본 일요일 10:00). 변경 후 `pkgup schedule install` 을 다시 실행하면 갱신됩니다.
+The run weekday/time comes from `SCHEDULE_WEEKDAY` / `SCHEDULE_HOUR` / `SCHEDULE_MINUTE`
+in config (default Sunday 10:00). After changing them, re-run `pkgup schedule install`
+to apply.
 
-> 에이전트의 PATH에는 `~/.npm-global/bin` 까지 포함됩니다. nvm 등 다른 노드 경로를
-> 쓰면 config의 `EXTRA_PATH` 로 보강하세요.
+> The agent's PATH includes `~/.npm-global/bin`. If you use another node path (nvm etc.),
+> add it via `EXTRA_PATH` in config.
 
-### 수동 / cron (대안)
+### Manual / cron (alternative)
 
-리포지토리의 `com.user.pkgup.plist` 는 수동 설치용 참고 파일입니다
-(`pkgup schedule install` 은 동일한 내용을 자동 생성하므로 보통 필요 없습니다).
+The repository's `com.user.pkgup.plist` is a reference file for manual installation
+(`pkgup schedule install` generates the same content automatically, so it is usually
+not needed).
 
-cron으로 하려면:
+To use cron instead:
 
 ```sh
 crontab -e
-# 매주 일요일 10:00
+# Every Sunday at 10:00
 0 10 * * 0 /Users/<you>/.local/bin/pkgup update --yes >> ~/Library/Logs/pkgup.cron.log 2>&1
 ```
 
-macOS에서 cron은 Full Disk Access 권한이 필요할 수 있고, sleep 중 누락 시 보정 실행이
-없습니다. launchd(=`pkgup schedule`)는 예약 시각에 잠들어 있었으면 깨어난 직후 한 번
-실행해 주므로 권장합니다.
+On macOS, cron may require Full Disk Access, and runs missed while asleep are not made up.
+launchd (= `pkgup schedule`) runs once right after waking if the machine was asleep at the
+scheduled time, so it is recommended.
 
-## 파일 위치
+## File locations
 
-- 설정: `~/.config/pkgup/config` (secret 포함 — git 커밋 금지)
-- 마스킹 목록: `~/.config/pkgup/masks` (`manager:name` 한 줄씩)
-- 실행 로그: `~/.config/pkgup/logs/` (최근 20개 자동 유지)
+- Config: `~/.config/pkgup/config` (contains secrets — do not commit to git)
+- Mask list: `~/.config/pkgup/masks` (one `manager:name` per line)
+- Run logs: `~/.config/pkgup/logs/` (most recent 20 kept automatically)
 
-## 참고 / 제약
+## Notes / limitations
 
-- npm 업데이트 기본값은 `latest`(메이저 포함). semver 범위 내로만 올리려면
-  config에서 `NPM_UPDATE_TARGET="wanted"`.
-- cask는 기본적으로 자체 업데이트하는 앱은 검사에서 제외됩니다. 모두 포함하려면
-  `BREW_CASK_GREEDY=true`.
-- Slack webhook 미설정 시 전송만 건너뛰고 리포트는 로그/stdout에 남습니다.
-- 개별 패키지 업그레이드 실패는 전체를 중단시키지 않고 리포트의 `Failed` 에 모입니다.
+- The npm update default is `latest` (including major versions). To stay within semver
+  ranges, set `NPM_UPDATE_TARGET="wanted"` in config.
+- Casks that auto-update themselves are excluded from checks by default. To include them
+  all, set `BREW_CASK_GREEDY=true`.
+- If the Slack webhook is unset, only the sending is skipped; the report still goes to
+  the log/stdout.
+- An individual package upgrade failure does not abort the run; failures are collected
+  under `Failed` in the report.
 
-## 저장소 구조
+## Repository layout
 
 ```
 .
-├── CLAUDE.md              # Claude Code용 프로젝트 컨텍스트
+├── CLAUDE.md              # project context for Claude Code
 ├── README.md
-├── pkgup                  # 메인 실행 스크립트 (zsh)
-├── config.example        # 설정 템플릿
-└── com.user.pkgup.plist   # 주간 실행용 launchd LaunchAgent
+├── pkgup                  # main executable script (zsh)
+├── config.example        # config template
+└── com.user.pkgup.plist   # launchd LaunchAgent for weekly runs
 ```

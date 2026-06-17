@@ -355,9 +355,37 @@ agent_plist() { print -r -- "$HOME/Library/LaunchAgents/${PKGUP_LABEL}.plist"; }
 
 write_agent_plist() {  # write_agent_plist <self-path>
   local self=$1
-  local weekday=${SCHEDULE_WEEKDAY:-0} hour=${SCHEDULE_HOUR:-10} minute=${SCHEDULE_MINUTE:-0}
+  local weekday=${SCHEDULE_WEEKDAY-0} hour=${SCHEDULE_HOUR:-10} minute=${SCHEDULE_MINUTE:-0}
   local plist; plist=$(agent_plist)
   mkdir -p "${plist:h}"
+  # SCHEDULE_WEEKDAY accepts a space-separated list ("1 2 3 4 5" = weekdays only).
+  #   empty   → one dict, no Weekday key            → run daily
+  #   single  → one dict with Weekday               → run weekly
+  #   many    → an array of dicts, one per weekday  → run on those days
+  local -a days=(${=weekday})
+  local cal_block
+  if (( ${#days} <= 1 )); then
+    local weekday_line=""
+    [[ -n $weekday ]] && weekday_line="    <key>Weekday</key><integer>${weekday}</integer>
+"
+    cal_block="  <dict>
+${weekday_line}    <key>Hour</key><integer>${hour}</integer>
+    <key>Minute</key><integer>${minute}</integer>
+  </dict>"
+  else
+    cal_block="  <array>"
+    local d
+    for d in $days; do
+      cal_block+="
+    <dict>
+      <key>Weekday</key><integer>${d}</integer>
+      <key>Hour</key><integer>${hour}</integer>
+      <key>Minute</key><integer>${minute}</integer>
+    </dict>"
+    done
+    cal_block+="
+  </array>"
+  fi
   cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -372,11 +400,7 @@ write_agent_plist() {  # write_agent_plist <self-path>
     <string>--yes</string>
   </array>
   <key>StartCalendarInterval</key>
-  <dict>
-    <key>Weekday</key><integer>${weekday}</integer>
-    <key>Hour</key><integer>${hour}</integer>
-    <key>Minute</key><integer>${minute}</integer>
-  </dict>
+${cal_block}
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
@@ -404,10 +428,10 @@ schedule_install() {
   launchctl bootout "$dom/${PKGUP_LABEL}" 2>/dev/null || true   # clear existing registration (idempotent)
   launchctl bootstrap "$dom" "$plist"
   launchctl enable "$dom/${PKGUP_LABEL}"
-  local weekday=${SCHEDULE_WEEKDAY:-0} hour=${SCHEDULE_HOUR:-10} minute=${SCHEDULE_MINUTE:-0}
+  local weekday=${SCHEDULE_WEEKDAY-0} hour=${SCHEDULE_HOUR:-10} minute=${SCHEDULE_MINUTE:-0}
   print -r -- "installed: ${PKGUP_LABEL}"
   print -r -- "  exec:     $self update --yes"
-  print -r -- "  schedule: weekday=${weekday} ${hour}:$(printf '%02d' "$minute")  (0=Sun)"
+  print -r -- "  schedule: $([[ -n $weekday ]] && print -n "weekday=${weekday}" || print -n "daily") ${hour}:$(printf '%02d' "$minute")  (0=Sun)"
   print -r -- "  plist:    $plist"
   print -r -- "  test now: launchctl kickstart -k $dom/${PKGUP_LABEL}"
 }
@@ -431,8 +455,8 @@ schedule_status() {
   else
     print -r -- "loaded:     no"
   fi
-  local weekday=${SCHEDULE_WEEKDAY:-0} hour=${SCHEDULE_HOUR:-10} minute=${SCHEDULE_MINUTE:-0}
-  print -r -- "schedule:   weekday=${weekday} ${hour}:$(printf '%02d' "$minute")  (config: SCHEDULE_WEEKDAY/HOUR/MINUTE)"
+  local weekday=${SCHEDULE_WEEKDAY-0} hour=${SCHEDULE_HOUR:-10} minute=${SCHEDULE_MINUTE:-0}
+  print -r -- "schedule:   $([[ -n $weekday ]] && print -n "weekday=${weekday}" || print -n "daily") ${hour}:$(printf '%02d' "$minute")  (config: SCHEDULE_WEEKDAY/HOUR/MINUTE)"
 }
 
 usage() {

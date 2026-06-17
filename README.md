@@ -84,7 +84,7 @@ The mask list is stored in `~/.config/pkgup/masks`, one `manager:name` per line.
 | `BREW_CLEANUP` | `false` | Run `brew cleanup` after upgrading |
 | `BREW_CASK_GREEDY` | `false` | Also check casks that auto-update (`brew outdated --greedy`) |
 | `EXTRA_PATH` | (none) | Extra PATH entries for scheduled runs (e.g. nvm node path) |
-| `SCHEDULE_WEEKDAY` | `0` | Weekday for `schedule install` runs (0/7 = Sunday) |
+| `SCHEDULE_WEEKDAY` | `0` | Weekday for `schedule install` runs (0/7 = Sunday). Empty (`SCHEDULE_WEEKDAY=`) = daily; a space-separated list (`"1 2 3 4 5"`) = those weekdays only |
 | `SCHEDULE_HOUR` | `10` | Hour for `schedule install` runs |
 | `SCHEDULE_MINUTE` | `0` | Minute for `schedule install` runs |
 | `PKGUP_LABEL` | `com.user.pkgup` | LaunchAgent label |
@@ -109,8 +109,13 @@ launchctl kickstart -k gui/$(id -u)/com.user.pkgup
 ```
 
 The run weekday/time comes from `SCHEDULE_WEEKDAY` / `SCHEDULE_HOUR` / `SCHEDULE_MINUTE`
-in config (default Sunday 10:00). After changing them, re-run `pkgup schedule install`
-to apply.
+in config (default Sunday 10:00). `SCHEDULE_WEEKDAY` controls which days:
+
+- `SCHEDULE_WEEKDAY=0` — weekly (Sunday); `1`–`6` for Mon–Sat
+- `SCHEDULE_WEEKDAY=` (empty) — **daily**, every day at `HOUR:MINUTE`
+- `SCHEDULE_WEEKDAY="1 2 3 4 5"` — only those weekdays (here, Mon–Fri)
+
+After changing them, re-run `pkgup schedule install` to apply.
 
 > The agent's PATH includes `~/.npm-global/bin`. If you use another node path (nvm etc.),
 > add it via `EXTRA_PATH` in config.

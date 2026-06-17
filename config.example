@@ -19,7 +19,10 @@ BREW_CASK_GREEDY=false
 # EXTRA_PATH="$HOME/.nvm/versions/node/v22.0.0/bin"
 
 # ── launchd schedule (pkgup schedule install) ──
-# Run weekday/time. Weekday: 0 or 7 = Sunday
+# Run weekday/time. Weekday: 0 or 7 = Sunday.
+#   SCHEDULE_WEEKDAY=          → run DAILY at HOUR:MINUTE
+#   SCHEDULE_WEEKDAY=0         → run weekly (Sunday)
+#   SCHEDULE_WEEKDAY="1 2 3 4 5" → run on those weekdays only (Mon–Fri)
 # SCHEDULE_WEEKDAY=0
 # SCHEDULE_HOUR=10
 # SCHEDULE_MINUTE=0

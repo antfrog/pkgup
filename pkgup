@@ -330,16 +330,16 @@ cmd_check() {
   local l n
   if command -v brew >/dev/null 2>&1; then
     brew update >/dev/null 2>&1 || true
-    print -r -- "\n[brew formulae]"
+    print -r -- $'\n[brew formulae]'
     brew outdated --formula --verbose 2>/dev/null | while IFS= read -r l; do
       [[ -z $l ]] && continue
       n=${l%% *}
       if is_masked brew "$n"; then print -r -- "  $l   (MASKED)"; else print -r -- "  $l"; fi
     done
     if [[ ${SKIP_CASK:-false} == true ]]; then
-      print -r -- "\n[brew casks]  (DISABLED via SKIP_CASK)"
+      print -r -- $'\n[brew casks]  (DISABLED via SKIP_CASK)'
     else
-      print -r -- "\n[brew casks]"
+      print -r -- $'\n[brew casks]'
       brew outdated --cask --verbose 2>/dev/null | while IFS= read -r l; do
         [[ -z $l ]] && continue
         n=${l%% *}
@@ -348,7 +348,7 @@ cmd_check() {
     fi
   fi
   if command -v npm >/dev/null 2>&1; then
-    print -r -- "\n[npm globals]"
+    print -r -- $'\n[npm globals]'
     npm_outdated_parsed | while IFS=$'\t' read -r n c la w; do
       [[ -z $n ]] && continue
       if is_masked npm "$n"; then print -r -- "  $n ($c → $la)   (MASKED)"; else print -r -- "  $n ($c → $la)"; fi

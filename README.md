@@ -84,6 +84,7 @@ The mask list is stored in `~/.config/pkgup/masks`, one `manager:name` per line.
 | `BREW_CLEANUP` | `false` | Run `brew cleanup` after upgrading |
 | `BREW_CASK_GREEDY` | `false` | Also check casks that auto-update (`brew outdated --greedy`) |
 | `SKIP_CASK` | `false` | Exclude casks from updates entirely; formulae and npm still run |
+| `NPM_OUTDATED_TIMEOUT` | `20` | Seconds to allow `npm outdated -g` before skipping npm (guards against an unreachable private registry hanging the run). Requires coreutils `timeout`/`gtimeout` |
 | `EXTRA_PATH` | (none) | Extra PATH entries for scheduled runs (e.g. nvm node path) |
 | `SCHEDULE_WEEKDAY` | `0` | Weekday for `schedule install` runs (0/7 = Sunday). Empty (`SCHEDULE_WEEKDAY=`) = daily; a space-separated list (`"1 2 3 4 5"`) = those weekdays only |
 | `SCHEDULE_HOUR` | `10` | Hour for `schedule install` runs |

@@ -193,8 +193,26 @@ update_brew_casks() {
   done
 }
 
+# Pick a coreutils timeout binary (timeout, or gtimeout on macOS Homebrew).
+timeout_cmd() {
+  if command -v timeout >/dev/null 2>&1; then print -r -- timeout
+  elif command -v gtimeout >/dev/null 2>&1; then print -r -- gtimeout
+  fi
+}
+
 npm_outdated_parsed() {  # output: name\tcurrent\tlatest\twanted
-  npm outdated -g --json 2>/dev/null | node -e '
+  # `npm outdated -g` queries the registry for every global package, so an
+  # unreachable scoped registry (e.g. a private/VPN-only one) can hang it
+  # indefinitely. Bound it with coreutils timeout so runs never freeze.
+  local out rc=0 t to; t=$(timeout_cmd); to=${NPM_OUTDATED_TIMEOUT:-20}
+  # -k 5: if npm ignores SIGTERM, hard-kill 5s later so we never wedge.
+  local -a pre=(); [[ -n $t ]] && pre=("$t" -k 5 "$to")
+  out=$("${pre[@]}" npm outdated -g --json 2>/dev/null) || rc=$?
+  if [[ -n $t && ( $rc -eq 124 || $rc -eq 137 ) ]]; then
+    log "npm outdated timed out after ${to}s (unreachable registry?); skipping npm"
+    return 0
+  fi
+  print -r -- "$out" | node -e '
     let d="";
     process.stdin.on("data", c => d += c);
     process.stdin.on("end", () => {
@@ -330,16 +348,16 @@ cmd_check() {
   local l n
   if command -v brew >/dev/null 2>&1; then
     brew update >/dev/null 2>&1 || true
-    print -r -- "\n[brew formulae]"
+    print -r -- $'\n[brew formulae]'
     brew outdated --formula --verbose 2>/dev/null | while IFS= read -r l; do
       [[ -z $l ]] && continue
       n=${l%% *}
       if is_masked brew "$n"; then print -r -- "  $l   (MASKED)"; else print -r -- "  $l"; fi
     done
     if [[ ${SKIP_CASK:-false} == true ]]; then
-      print -r -- "\n[brew casks]  (DISABLED via SKIP_CASK)"
+      print -r -- $'\n[brew casks]  (DISABLED via SKIP_CASK)'
     else
-      print -r -- "\n[brew casks]"
+      print -r -- $'\n[brew casks]'
       brew outdated --cask --verbose 2>/dev/null | while IFS= read -r l; do
         [[ -z $l ]] && continue
         n=${l%% *}
@@ -348,7 +366,7 @@ cmd_check() {
     fi
   fi
   if command -v npm >/dev/null 2>&1; then
-    print -r -- "\n[npm globals]"
+    print -r -- $'\n[npm globals]'
     npm_outdated_parsed | while IFS=$'\t' read -r n c la w; do
       [[ -z $n ]] && continue
       if is_masked npm "$n"; then print -r -- "  $n ($c → $la)   (MASKED)"; else print -r -- "  $n ($c → $la)"; fi

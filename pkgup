@@ -301,7 +301,11 @@ cmd_update() {
     log "brew update..."
     brew update >>"$LOG_FILE" 2>&1 || log "brew update failed (continuing)"
     update_brew_formulae "$mode"
-    update_brew_casks "$mode"
+    if [[ ${SKIP_CASK:-false} == true ]]; then
+      log "cask updates disabled (SKIP_CASK=true), skipping"
+    else
+      update_brew_casks "$mode"
+    fi
     [[ ${BREW_CLEANUP:-false} == true ]] && { log "brew cleanup..."; brew cleanup >>"$LOG_FILE" 2>&1 || true; }
   else
     log "brew not found, skipping"
@@ -332,12 +336,16 @@ cmd_check() {
       n=${l%% *}
       if is_masked brew "$n"; then print -r -- "  $l   (MASKED)"; else print -r -- "  $l"; fi
     done
-    print -r -- "\n[brew casks]"
-    brew outdated --cask --verbose 2>/dev/null | while IFS= read -r l; do
-      [[ -z $l ]] && continue
-      n=${l%% *}
-      if is_masked cask "$n"; then print -r -- "  $l   (MASKED)"; else print -r -- "  $l"; fi
-    done
+    if [[ ${SKIP_CASK:-false} == true ]]; then
+      print -r -- "\n[brew casks]  (DISABLED via SKIP_CASK)"
+    else
+      print -r -- "\n[brew casks]"
+      brew outdated --cask --verbose 2>/dev/null | while IFS= read -r l; do
+        [[ -z $l ]] && continue
+        n=${l%% *}
+        if is_masked cask "$n"; then print -r -- "  $l   (MASKED)"; else print -r -- "  $l"; fi
+      done
+    fi
   fi
   if command -v npm >/dev/null 2>&1; then
     print -r -- "\n[npm globals]"

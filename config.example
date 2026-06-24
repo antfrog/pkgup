@@ -15,6 +15,9 @@ BREW_CLEANUP=false
 # Also check GUI casks that auto-update themselves (brew outdated --greedy)
 BREW_CASK_GREEDY=false
 
+# Exclude casks from updates entirely (formulae/npm still run)
+SKIP_CASK=false
+
 # Extra PATH entries for scheduled (launchd/cron) runs (e.g. nvm/fnm node path)
 # EXTRA_PATH="$HOME/.nvm/versions/node/v22.0.0/bin"
 

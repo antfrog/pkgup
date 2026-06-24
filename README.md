@@ -83,6 +83,7 @@ The mask list is stored in `~/.config/pkgup/masks`, one `manager:name` per line.
 | `NPM_UPDATE_TARGET` | `latest` | `latest` = newest (including major) / `wanted` = within semver range |
 | `BREW_CLEANUP` | `false` | Run `brew cleanup` after upgrading |
 | `BREW_CASK_GREEDY` | `false` | Also check casks that auto-update (`brew outdated --greedy`) |
+| `SKIP_CASK` | `false` | Exclude casks from updates entirely; formulae and npm still run |
 | `EXTRA_PATH` | (none) | Extra PATH entries for scheduled runs (e.g. nvm node path) |
 | `SCHEDULE_WEEKDAY` | `0` | Weekday for `schedule install` runs (0/7 = Sunday). Empty (`SCHEDULE_WEEKDAY=`) = daily; a space-separated list (`"1 2 3 4 5"`) = those weekdays only |
 | `SCHEDULE_HOUR` | `10` | Hour for `schedule install` runs |

@@ -1,0 +1,25 @@
+---
+name: pkgup
+
+path: .
+env:
+  work_home_path: .
+
+windows:
+  - name: vim
+    panes:
+      - commands:
+          - command: nvim
+        focus: true
+
+  - name: file
+    flex_direction: row
+    panes:
+      - flex: 3
+        focus: true
+      - flex: 2
+
+  - name: claude
+    panes: 
+      - commands:
+        - command: claude

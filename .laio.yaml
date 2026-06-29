@@ -19,7 +19,7 @@ windows:
         focus: true
       - flex: 2
 
-  - name: claude
+  - name: AI
     panes: 
       - commands:
-        - command: claude
+        - command: ccd

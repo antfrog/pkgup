@@ -22,6 +22,9 @@ SKIP_CASK=false
 # registry can hang it). Needs coreutils `timeout`/`gtimeout`; ignored if absent.
 NPM_OUTDATED_TIMEOUT=20
 
+# Delete pkgup run logs older than this many days on every update run.
+LOG_RETENTION_DAYS=30
+
 # Extra PATH entries for scheduled (launchd/cron) runs (e.g. nvm/fnm node path)
 # EXTRA_PATH="$HOME/.nvm/versions/node/v22.0.0/bin"
 

@@ -300,9 +300,36 @@ send_slack() {
 prune_logs() {
   local d="$PKGUP_HOME/logs"
   [[ -d $d ]] || return 0
-  local -a old=( ${(f)"$(ls -1t "$d" 2>/dev/null | tail -n +21)"} )
-  local f
-  for f in "${old[@]}"; do [[ -n $f ]] && rm -f "$d/$f"; done
+  local days=${LOG_RETENTION_DAYS:-30}
+  if [[ $days != <-> ]]; then
+    log "Invalid LOG_RETENTION_DAYS=${days}; skipping log pruning"
+    return 0
+  fi
+
+  local days_num=$(( 10#$days ))
+  local now cutoff
+  now=$(date +%s)
+  cutoff=$(( now - days_num * 86400 ))
+
+  local -a files=( "$d"/pkgup-*.log(N) )
+  local f mtime pruned=0
+  for f in "${files[@]}"; do
+    [[ $f == "$LOG_FILE" ]] && continue
+    if ! mtime=$(stat -f %m "$f" 2>/dev/null); then
+      if ! mtime=$(stat -c %Y "$f" 2>/dev/null); then
+        log "Cannot stat log file: ${f:t}; skipping"
+        continue
+      fi
+    fi
+    if (( mtime < cutoff )); then
+      if rm -f "$f"; then
+        (( pruned += 1 ))
+      else
+        log "Failed to prune log file: ${f:t}"
+      fi
+    fi
+  done
+  (( pruned > 0 )) && log "Pruned ${pruned} log file(s) older than ${days_num} day(s)"
 }
 
 # ── Commands ────────────────────────────────────────────────────────────────
@@ -314,6 +341,7 @@ cmd_update() {
   load_config
   start_ts=$(date "+%Y-%m-%d %H:%M:%S")
   log "pkgup start (mode=$mode)"
+  prune_logs
 
   if command -v brew >/dev/null 2>&1; then
     log "brew update..."
@@ -338,7 +366,6 @@ cmd_update() {
   local report; report=$(build_report "$mode")
   print -r -- "$report" | tee -a "$LOG_FILE"
   send_slack "$report"
-  prune_logs
   log "pkgup done"
 }
 
